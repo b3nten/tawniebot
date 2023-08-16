@@ -5,6 +5,7 @@ import { WebSocketManager } from "npm:@discordjs/ws";
 import "https://deno.land/std@0.198.0/dotenv/load.ts"
 
 const DISCORD_TOKEN = Deno.env.get("DISCORD_TOKEN");
+const DISCORD_APP_ID = Deno.env.get("DISCORD_APP_ID");
 
 enum Time {
   Second = 1000,
@@ -26,15 +27,15 @@ enum Levels {
 }
 
 function get_level(messages: number): Levels {
-  if (messages <= 0) return Levels.Zero;
-  if (messages <= 1) return Levels.One;
-  if (messages <= 2) return Levels.Two;
-  if (messages <= 4) return Levels.Three;
-  if (messages <= 8) return Levels.Four;
-  if (messages <= 16) return Levels.Five;
-  if (messages <= 32) return Levels.Six;
-  if (messages <= 64) return Levels.Seven;
-  if (messages <= 128) return Levels.Eight;
+  if (messages === 0) return Levels.Zero;
+  if (messages <= 4) return Levels.One;
+  if (messages <= 8) return Levels.Two;
+  if (messages <= 16) return Levels.Three;
+  if (messages <= 32) return Levels.Four;
+  if (messages <= 64) return Levels.Five;
+  if (messages <= 128) return Levels.Six;
+  if (messages <= 256) return Levels.Seven;
+  if (messages <= 512) return Levels.Eight;
   return Levels.Nine;
 }
 
@@ -97,15 +98,14 @@ class TawnyBot {
   client: discord.Client;
   rest: REST;
   gateway: WebSocketManager;
-  guilds: discord.GuildsAPI;
-  channels: discord.ChannelsAPI;
 
-  connected_guilds = new Set<string>();
+  // Store guilds in memory
+  connected_guilds = new Map<string, discord.APIGuild >();
 
   constructor() {
-    if (!DISCORD_TOKEN) {
+    if (!DISCORD_TOKEN || !DISCORD_APP_ID) {
       console.error(
-        "No discord token provided as DISCORD_TOKEN environment variable",
+        "No discord token / app id provided as DISCORD_TOKEN / DISCORD_APP_ID environment variable",
       );
       Deno.exit(1);
     }
@@ -117,9 +117,11 @@ class TawnyBot {
   		CREATE TABLE IF NOT EXISTS users (
   		  id INTEGER PRIMARY KEY AUTOINCREMENT,
   		  name TEXT,
-				user_id TEXT UNIQUE,
+				user_id TEXT,
 				message_count INTEGER,
-				level INTEGER
+				level INTEGER,
+        guild_id TEXT,
+        UNIQUE(user_id, guild_id)
   		)
 		`);
 
@@ -137,15 +139,10 @@ class TawnyBot {
       rest: this.rest,
       gateway: this.gateway,
     });
-
-    this.guilds = new discord.GuildsAPI(this.rest);
-
-    this.channels = new discord.ChannelsAPI(this.rest);
   }
 
   start() {
-    this.client.on(discord.GatewayDispatchEvents.Ready, (msg) => {
-      console.log(msg.data.guilds)
+    this.client.on(discord.GatewayDispatchEvents.Ready, () => {
       console.log("Bot is ready");
     });
     this.client.on(
@@ -156,20 +153,13 @@ class TawnyBot {
     // this.delete_messages();
   }
 
-  async delete_messages() {
-    for (let guild_id of this.connected_guilds) {
-      const channels = await this.guilds.getChannels(guild_id);
-      const channel = channels.find((channel) => channel.name === "chat");
-      if (!channel) return;
-
-      const messages = await this.channels.getMessages(channel.id, {
-        limit: 100,
-      });
-      console.log(messages);
+  async get_guild(guild_id: string) {
+    if (this.connected_guilds.has(guild_id)) {
+      return this.connected_guilds.get(guild_id);
     }
-    setTimeout(() => {
-      this.delete_messages();
-    }, Time.Second * 10);
+    const guild = await this.client.api.guilds.get(guild_id);
+    this.connected_guilds.set(guild_id, guild);
+    return guild;
   }
 
   async handle_message(
@@ -181,62 +171,75 @@ class TawnyBot {
       if (!message.data.guild_id) return;
       if (message.data.author.bot) return;
 
-      // add guild to connected guilds
-      this.connected_guilds.add(message.data.guild_id);
-
       const user_id = message.data.author.id;
       const user_name = message.data.author.username;
 
       // Update user
       let user = this.db.queryEntries(
-        `INSERT INTO users (user_id, name, message_count, level)
-        VALUES (?, ?, COALESCE((SELECT message_count FROM users WHERE user_id = ?), 1), COALESCE((SELECT level FROM users WHERE user_id = ?), 0))
-        ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, message_count = excluded.message_count + 1, level = excluded.level
+        `INSERT INTO users (user_id, name, message_count, level, guild_id)
+        VALUES (?, ?, COALESCE((SELECT message_count FROM users WHERE user_id = ?), 1), COALESCE((SELECT level FROM users WHERE user_id = ?), 0), ?)
+        ON CONFLICT(user_id, guild_id) DO UPDATE SET message_count = excluded.message_count + 1
         RETURNING *;`,
-        [user_id, user_name, user_id, user_id],
+        [user_id, user_name, user_id, user_id, message.data.guild_id],
       )[0] as unknown as User;
 
-      // check if user level has changed
-      if (
-        get_level(user.message_count) !== user.level
-      ) {
-        this.update_level(user_id, message.data.guild_id);
-      }
+      this.update_level(user_id, user.message_count, message.data.member?.roles ?? [], message.data.guild_id);
+      
     } catch (e) {
       console.error(e);
     }
   }
 
-  async update_level(user_id: string, guild_id: string) {
-    const user = this.db.queryEntries(
-      "SELECT * FROM users WHERE user_id = ?",
-      [user_id],
-    )[0] as unknown as User;
+  async update_level(user_id: string, user_message_count: number, user_guild_roles: string[], guild_id: string) {
 
-    const new_user_role = roles[get_level(user.message_count)];
-    const guild = await this.guilds.get(guild_id);
-    const new_role = guild.roles.find((role) =>
-      role.name === new_user_role?.name
-    );
+    const guild = await this.get_guild(guild_id);
+    if (!guild) return false;
 
-    if (!new_role) return false;
-    // add role to user
-    await this.guilds.addRoleToMember(guild.id, user_id, new_role!.id);
+    const expected_user_role = roles[get_level(user_message_count)];
+    const current_roles = user_guild_roles.map((role_id) =>
+      guild.roles.find((role) => role.id === role_id)
+    ).filter((role) => role?.name.startsWith("lvl "));
 
-    // remove old role from user
-    const old_roles = guild.roles.filter((role) =>
-      role.name.startsWith("lvl ") && role.name !== new_user_role?.name
-    );
-    for (let role of old_roles) {
-      this.guilds.removeRoleFromMember(guild.id, user_id, role.id);
+    if(current_roles.length === 0 && expected_user_role === null) return false;
+
+    // remove old roles
+    for (let role of current_roles) {
+      if (role?.name !== expected_user_role?.name) {
+        this.client.api.guilds.removeRoleFromMember(guild_id, user_id, role?.id ?? "");
+      }
+    }
+
+    // add new role
+    if (expected_user_role !== null) {
+      console.log(expected_user_role)
+      const role = guild.roles.find((role) => role.name === expected_user_role.name);
+      if (role) {
+        await this.client.api.guilds.addRoleToMember(guild_id, user_id, role.id);
+      }
     }
 
     // update user
     this.db.query(
       "UPDATE users SET level = ? WHERE user_id = ?",
-      [get_level(user.message_count), user_id],
+      [get_level(user_message_count), user_id],
     );
+    
     return true;
+  }
+
+  async delete_messages() {
+    for (let [guild_id] of this.connected_guilds) {
+      const channels = await this.client.api.guilds.getChannels(guild_id);
+      const channel = channels.find((channel) => channel.name === "chat");
+      if (!channel) return;
+      const messages = await this.client.api.channels.getMessages(channel.id, {
+        limit: 100,
+      });
+      console.log(messages);
+    }
+    setTimeout(() => {
+      this.delete_messages();
+    }, Time.Second * 10);
   }
 }
 

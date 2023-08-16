@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for tawnybot on 2023-08-15T23:52:28-06:00
+# fly.toml app configuration file generated for tawnybot on 2023-08-16T02:21:18-06:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -9,6 +9,10 @@ primary_region = "sjc"
 [processes]
   app = "run -A ./mod.ts"
 
+[[mounts]]
+  source = "app_data"
+  destination = "/data"
+
 [http_service]
   internal_port = 8080
   force_https = true
@@ -16,8 +20,3 @@ primary_region = "sjc"
   auto_start_machines = true
   min_machines_running = 1
   processes = ["app"]
-
-[mounts]
-  source="app_data"
-  destination="/data"
-

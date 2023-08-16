@@ -118,6 +118,11 @@ class TawnyBot {
       rest: this.rest,
       gateway: this.gateway,
     });
+
+    this.client.api.applicationCommands.createGlobalCommand("123", {
+      description: "test",
+      name: "test",
+    });
   }
 
   start() {
@@ -127,6 +132,11 @@ class TawnyBot {
     this.client.on(
       discord.GatewayDispatchEvents.MessageCreate,
       this.handle_message.bind(this),
+    );
+    this.client.on(
+      discord.GatewayDispatchEvents.IntegrationCreate,
+      (i) => {
+      },
     );
     this.gateway.connect();
   }
@@ -156,31 +166,38 @@ class TawnyBot {
     user_guild_roles: string[],
     guild_id: string,
   ) {
-    const guild = await this.get_or_create_guild(guild_id);
-    if (!guild) return false;
+    try {
+      const guild = await this.get_or_create_guild(guild_id);
+      if (!guild) return false;
 
-    const expected_user_role = guild.get_level_by_messages(user_message_count);
-    if (!expected_user_role) return false;
+      const expected_user_role = guild.get_level_by_messages(
+        user_message_count,
+      );
+      if (!expected_user_role) return false;
 
-    const expected_role = guild.get_level(expected_user_role);
+      const expected_role = guild.get_level(expected_user_role);
 
-    const user_role = user_guild_roles.find((role) =>
-      role === expected_role.id
-    );
-    if (user_role) return false;
+      const user_role = user_guild_roles.find((role) =>
+        role === expected_role.id
+      );
+      if (user_role) return false;
 
-    await this.client.api.guilds.addRoleToMember(
-      guild_id,
-      user_id,
-      expected_role.id,
-    );
+      await this.client.api.guilds.addRoleToMember(
+        guild_id,
+        user_id,
+        expected_role.id,
+      );
 
-    this.db.query(
-      `UPDATE users SET level = ? WHERE user_id = ? AND guild_id = ?`,
-      [expected_user_role, user_id, guild_id],
-    );
+      this.db.query(
+        `UPDATE users SET level = ? WHERE user_id = ? AND guild_id = ?`,
+        [expected_user_role, user_id, guild_id],
+      );
 
-    return true;
+      return true;
+    } catch (e) {
+      console.error(e);
+      return false;
+    }
   }
 
   async handle_command(
@@ -188,6 +205,7 @@ class TawnyBot {
       discord.GatewayMessageCreateDispatchData
     >,
   ) {
+    if (message.data.member?.flags) return;
     try {
       // !tawnybot set level [level] [target] [name]
       if (message.data.content.startsWith("!tawnybot set level")) {

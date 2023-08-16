@@ -118,11 +118,6 @@ class TawnyBot {
       rest: this.rest,
       gateway: this.gateway,
     });
-
-    this.client.api.applicationCommands.createGlobalCommand("123", {
-      description: "test",
-      name: "test",
-    });
   }
 
   start() {
@@ -132,11 +127,6 @@ class TawnyBot {
     this.client.on(
       discord.GatewayDispatchEvents.MessageCreate,
       this.handle_message.bind(this),
-    );
-    this.client.on(
-      discord.GatewayDispatchEvents.IntegrationCreate,
-      (i) => {
-      },
     );
     this.gateway.connect();
   }

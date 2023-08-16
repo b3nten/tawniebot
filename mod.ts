@@ -6,6 +6,7 @@ import "https://deno.land/std@0.198.0/dotenv/load.ts"
 
 const DISCORD_TOKEN = Deno.env.get("DISCORD_TOKEN");
 const DISCORD_APP_ID = Deno.env.get("DISCORD_APP_ID");
+const IS_FLY = Deno.env.get("FLY_ALLOC_ID");
 
 enum Time {
   Second = 1000,
@@ -110,7 +111,7 @@ class TawnyBot {
       Deno.exit(1);
     }
 
-    this.db = new DB("database.db");
+    this.db = new DB(IS_FLY ? "/data/database.db" : "database.db");
     this.db.query("PRAGMA foreign_keys = ON");
     this.db.query("PRAGMA journal_mode = WAL");
     this.db.execute(`

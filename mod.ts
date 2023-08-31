@@ -96,6 +96,16 @@ class TawnyBot {
         UNIQUE(user_id, guild_id)
   		)
 		`);
+
+        // I removed the id from this because... user_id and guild id are the primary keys, there will never be a time where you'd need the id
+    this.db.execute(`
+  		CREATE TABLE IF NOT EXISTS halted_users (
+            user_id TEXT,
+            guild_id TEXT,
+            UNIQUE(user_id)
+  		)
+		`);
+
     this.db.execute(`
       CREATE TABLE IF NOT EXISTS guilds (
         id TEXT PRIMARY KEY,
@@ -256,6 +266,88 @@ class TawnyBot {
         });
       }
 
+      if (message.data.content.startsWith("!tawnybot halt")) {
+        const guild = await this.get_or_create_guild(
+          message.data.guild_id ?? "",
+        );
+        if (!guild) return;
+
+        const mentions: Object[] = message.data.mentions;
+        if (mentions.length == 0) {
+            this.client.api.channels.createMessage(message.data.channel_id, {
+              content: 'You must mention someone to halt',
+            });
+            return;
+        }
+
+        const userId: String = mentions[0].id.toString();
+
+        const guild_entry = this.db.queryEntries(
+          `SELECT * FROM halted_users WHERE user_id = ? AND guild_id = ? LIMIT 1;`,
+          [userId, guild.id],
+        )[0];
+
+        if (guild_entry != undefined) {
+            this.client.api.channels.createMessage(message.data.channel_id, {
+              content: 'User is already in the halted list',
+            });
+            return;
+        }
+
+
+        // I wasn't aware on how to check if this was executed correctly so if you could change this that's fine, it works if everything works though considering the errors can only be if the user id already exists
+        this.db.queryEntries(
+            `INSERT INTO halted_users (user_id, guild_id)
+            VALUES (?, ?)`,
+            [userId, guild.id],
+        );
+        
+        this.client.api.channels.createMessage(message.data.channel_id, {
+          content: 'User has been added to the halted users',
+        });
+        return;
+      }
+
+      if (message.data.content.startsWith("!tawnybot unhalt")) {
+        const guild = await this.get_or_create_guild(
+          message.data.guild_id ?? "",
+        );
+        if (!guild) return;
+
+        const mentions: Object[] = message.data.mentions;
+        console.log(mentions);
+        if (mentions.length == 0) {
+            this.client.api.channels.createMessage(message.data.channel_id, {
+              content: 'You must mention someone to remove from the halt list',
+            });
+            return;
+        }
+
+        const userId: String = mentions[0].id.toString();
+
+        const guild_entry = this.db.queryEntries(
+          `SELECT * FROM halted_users WHERE user_id = ? AND guild_id = ? LIMIT 1;`,
+          [userId, guild.id],
+        )[0];
+
+        if (guild_entry == undefined) {
+            this.client.api.channels.createMessage(message.data.channel_id, {
+              content: 'User does not exist in the halted list',
+            });
+            return;
+        }
+
+        this.db.queryEntries(
+          `DELETE FROM halted_users WHERE user_id = ? AND guild_id = ?`,
+          [userId, guild.id],
+        )[0];
+        
+        this.client.api.channels.createMessage(message.data.channel_id, {
+          content: 'User has been removed from the halted users',
+        });
+        return;
+      }
+
       // !tawnybot remove level [level]
       if (message.data.content.startsWith("!tawnybot remove level")) {
         const guild = await this.get_or_create_guild(
@@ -309,6 +401,18 @@ class TawnyBot {
         this.handle_command(message);
         return;
       }
+
+      // Didn't want to do more changes, I was gonna put this to another function
+      const guild_entry = this.db.queryEntries(
+        `SELECT * FROM halted_users WHERE user_id = ? AND guild_id = ? LIMIT 1;`,
+        [message.data.author.id, message.data.guild_id],
+      )[0];
+
+      if (guild_entry != undefined) {
+        return;
+      }
+      console.log('Counting');
+      
 
       // Update user
       let user = this.db.queryEntries(

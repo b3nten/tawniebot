@@ -102,7 +102,7 @@ class TawnyBot {
   		CREATE TABLE IF NOT EXISTS halted_users (
             user_id TEXT,
             guild_id TEXT,
-            UNIQUE(user_id)
+            UNIQUE(user_id, guild_id)
   		)
 		`);
 

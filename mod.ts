@@ -315,7 +315,6 @@ class TawnyBot {
         if (!guild) return;
 
         const mentions: Object[] = message.data.mentions;
-        console.log(mentions);
         if (mentions.length == 0) {
             this.client.api.channels.createMessage(message.data.channel_id, {
               content: 'You must mention someone to remove from the halt list',
@@ -411,7 +410,6 @@ class TawnyBot {
       if (guild_entry != undefined) {
         return;
       }
-      console.log('Counting');
       
 
       // Update user

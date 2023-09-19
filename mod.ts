@@ -1,12 +1,14 @@
-import { DB } from "https://deno.land/x/sqlite@v3.7.3/mod.ts";
-import * as discord from "npm:@discordjs/core";
-import { REST } from "npm:@discordjs/rest";
-import { WebSocketManager } from "npm:@discordjs/ws";
-import "https://deno.land/std@0.198.0/dotenv/load.ts";
+import { Database } from "bun:sqlite";
+import * as discord from "@discordjs/core";
+import { REST } from "@discordjs/rest";
+import { WebSocketManager } from "@discordjs/ws";
+import { configDotenv } from "dotenv";
 
-const DISCORD_TOKEN = Deno.env.get("DISCORD_TOKEN");
-const DISCORD_APP_ID = Deno.env.get("DISCORD_APP_ID");
-const IS_FLY = Deno.env.get("FLY_ALLOC_ID");
+configDotenv();
+
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
+const IS_FLY = process.env.FLY_ALLOC_ID;
 
 interface Schema {
   user: User;
@@ -38,11 +40,7 @@ class Guild {
   name: string;
   levels: GuildLevels;
 
-  constructor(
-    id: string,
-    name: string,
-    levels: GuildLevels | string,
-  ) {
+  constructor(id: string, name: string, levels: GuildLevels | string) {
     this.id = id;
     this.name = name;
     if (typeof levels === "string") {
@@ -69,7 +67,7 @@ class Guild {
 }
 
 class TawnyBot {
-  db: DB;
+  db: Database;
   client: discord.Client;
   rest: REST;
   gateway: WebSocketManager;
@@ -77,15 +75,15 @@ class TawnyBot {
   constructor() {
     if (!DISCORD_TOKEN || !DISCORD_APP_ID) {
       console.error(
-        "No discord token / app id provided as DISCORD_TOKEN / DISCORD_APP_ID environment variable",
+        "No discord token / app id provided as DISCORD_TOKEN / DISCORD_APP_ID environment variable"
       );
-      Deno.exit(1);
+      process.exit(1);
     }
 
-    this.db = new DB(IS_FLY ? "/data/database.db" : "database.db");
+    this.db = new Database(IS_FLY ? "/data/database.db" : "database.db");
     this.db.query("PRAGMA foreign_keys = ON");
     this.db.query("PRAGMA journal_mode = WAL");
-    this.db.execute(`
+    this.db.run(`
   		CREATE TABLE IF NOT EXISTS users (
   		  id INTEGER PRIMARY KEY AUTOINCREMENT,
   		  name TEXT,
@@ -96,7 +94,7 @@ class TawnyBot {
         UNIQUE(user_id, guild_id)
   		)
 		`);
-    this.db.execute(`
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS guilds (
         id TEXT PRIMARY KEY,
         name TEXT,
@@ -108,7 +106,8 @@ class TawnyBot {
 
     this.gateway = new WebSocketManager({
       token: DISCORD_TOKEN,
-      intents: discord.GatewayIntentBits.GuildMessages |
+      intents:
+        discord.GatewayIntentBits.GuildMessages |
         discord.GatewayIntentBits.MessageContent |
         discord.GatewayIntentBits.GuildMembers,
       rest: this.rest,
@@ -126,24 +125,24 @@ class TawnyBot {
     });
     this.client.on(
       discord.GatewayDispatchEvents.MessageCreate,
-      this.handle_message.bind(this),
+      this.handle_message.bind(this)
     );
     this.gateway.connect();
   }
 
   async get_or_create_guild(guild_id: string): Promise<Guild | void> {
-    const guild_entry = this.db.queryEntries<Schema["guild"]>(
-      `SELECT * FROM guilds WHERE id = ?;`,
-      [guild_id],
-    )[0];
+    const stmt = this.db.prepare<Schema["guild"], string[]>(
+      `SELECT * FROM guilds WHERE id = ?;`
+    );
+    const guild_entry = stmt.get(guild_id);
 
     if (!guild_entry) {
       const guild = await this.client.api.guilds.get(guild_id);
       if (!guild) return;
-      this.db.queryEntries(
+      this.db.exec(
         `INSERT INTO guilds (id, name, levels)
         VALUES (?, ?, ?)`,
-        [guild.id, guild.name, "{}"],
+        [guild.id, guild.name, "{}"]
       );
       return new Guild(guild.id, guild.name, "{}");
     }
@@ -154,33 +153,32 @@ class TawnyBot {
     user_id: string,
     user_message_count: number,
     user_guild_roles: string[],
-    guild_id: string,
+    guild_id: string
   ) {
     try {
       const guild = await this.get_or_create_guild(guild_id);
       if (!guild) return false;
 
-      const expected_user_role = guild.get_level_by_messages(
-        user_message_count,
-      );
+      const expected_user_role =
+        guild.get_level_by_messages(user_message_count);
       if (!expected_user_role) return false;
 
       const expected_role = guild.get_level(expected_user_role);
 
-      const user_role = user_guild_roles.find((role) =>
-        role === expected_role.id
+      const user_role = user_guild_roles.find(
+        (role) => role === expected_role.id
       );
       if (user_role) return false;
 
       await this.client.api.guilds.addRoleToMember(
         guild_id,
         user_id,
-        expected_role.id,
+        expected_role.id
       );
 
-      this.db.query(
+      this.db.exec(
         `UPDATE users SET level = ? WHERE user_id = ? AND guild_id = ?`,
-        [expected_user_role, user_id, guild_id],
+        [expected_user_role, user_id, guild_id]
       );
 
       return true;
@@ -191,16 +189,14 @@ class TawnyBot {
   }
 
   async handle_command(
-    message: discord.WithIntrinsicProps<
-      discord.GatewayMessageCreateDispatchData
-    >,
+    message: discord.WithIntrinsicProps<discord.GatewayMessageCreateDispatchData>
   ) {
     if (message.data.member?.flags) return;
     try {
       // !tawnybot set level [level] [target] [name]
       if (message.data.content.startsWith("!tawnybot set level")) {
         const guild = await this.get_or_create_guild(
-          message.data.guild_id ?? "",
+          message.data.guild_id ?? ""
         );
         if (!guild) {
           this.client.api.channels.createMessage(message.data.channel_id, {
@@ -222,50 +218,20 @@ class TawnyBot {
         }
 
         const guild_info = await this.client.api.guilds.get(
-          message.data.guild_id ?? "",
+          message.data.guild_id ?? ""
         );
-        if (!guild_info) {
-          this.client.api.channels.createMessage(message.data.channel_id, {
-            content: "Guild not found",
-          });
-          return;
-        }
-
-        const role = guild_info.roles.find((role) => role.name === name);
-        if (!role) {
-          this.client.api.channels.createMessage(message.data.channel_id, {
-            content: "Role not found",
-          });
-          return;
-        }
-
-        guild.levels[level] = {
-          id: role.id,
-          target: parseInt(target),
-          name: role.name,
-        };
-
-        this.db.query("UPDATE guilds SET levels = ? WHERE id = ?", [
-          JSON.stringify(guild.levels),
-          guild.id,
-        ]);
-
-        this.client.api.channels.createMessage(message.data.channel_id, {
-          content:
-            `Set level ${level} to ${target} messages and "${name}" role`,
-        });
       }
 
       // !tawnybot remove level [level]
       if (message.data.content.startsWith("!tawnybot remove level")) {
         const guild = await this.get_or_create_guild(
-          message.data.guild_id ?? "",
+          message.data.guild_id ?? ""
         );
         if (!guild) return;
         const level = parseInt(message.data.content.split(" ")[3]);
         if (!level) return;
         delete guild.levels[level];
-        this.db.query("UPDATE guilds SET levels = ? WHERE id = ?", [
+        this.db.exec("UPDATE guilds SET levels = ? WHERE id = ?", [
           JSON.stringify(guild.levels),
           guild.id,
         ]);
@@ -274,12 +240,14 @@ class TawnyBot {
       // !tawnybot list levels
       if (message.data.content.startsWith("!tawnybot list levels")) {
         const guild = await this.get_or_create_guild(
-          message.data.guild_id ?? "",
+          message.data.guild_id ?? ""
         );
         if (!guild) return;
-        const levels = Object.entries(guild.levels).map(([level, role]) =>
-          `${level} (target: ${role.target}): ${role.name}`
-        ).join("\n");
+        const levels = Object.entries(guild.levels)
+          .map(
+            ([level, role]) => `${level} (target: ${role.target}): ${role.name}`
+          )
+          .join("\n");
         console.log(levels);
         this.client.api.channels.createMessage(message.data.channel_id, {
           content: levels.length ? levels : "No levels found",
@@ -294,9 +262,7 @@ class TawnyBot {
   }
 
   async handle_message(
-    message: discord.WithIntrinsicProps<
-      discord.GatewayMessageCreateDispatchData
-    >,
+    message: discord.WithIntrinsicProps<discord.GatewayMessageCreateDispatchData>
   ) {
     try {
       if (!message.data.guild_id) return;
@@ -311,19 +277,24 @@ class TawnyBot {
       }
 
       // Update user
-      let user = this.db.queryEntries(
+      this.db.exec(
         `INSERT INTO users (user_id, name, message_count, level, guild_id)
         VALUES (?, ?, COALESCE((SELECT message_count FROM users WHERE user_id = ?), 1), COALESCE((SELECT level FROM users WHERE user_id = ?), 0), ?)
         ON CONFLICT(user_id, guild_id) DO UPDATE SET message_count = excluded.message_count + 1
         RETURNING *;`,
-        [user_id, user_name, user_id, user_id, message.data.guild_id],
-      )[0] as unknown as Schema["user"];
+        [user_id, user_name, user_id, user_id, message.data.guild_id]
+      );
+      const stmt = this.db.prepare<Schema["user"], string[]>(
+        `SELECT * FROM users WHERE user_id = ?;`
+      );
+      const user = stmt.get(user_id);
+      if (!user) return;
 
       this.update_level(
         user.user_id,
         user.message_count,
         message.data.member?.roles ?? [],
-        message.data.guild_id,
+        message.data.guild_id
       );
     } catch (e) {
       console.error(e);
